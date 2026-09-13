@@ -384,6 +384,19 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Str
     let _ = stdin.shutdown().await;
 }
 
+/// once prompt caching kicks in agy moves the cached prefix out of
+/// `input_tokens` into `cache_read_tokens` (verified live: 18,580 input became
+/// 2,573 input + 16,268 cached on the next step), so occupancy is their sum.
+fn context_tokens(step: &Value) -> Option<u64> {
+    let usage = step.get("usage")?;
+    let input = usage.get("input_tokens").and_then(Value::as_u64)?;
+    let cached = usage
+        .get("cache_read_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some(input + cached)
+}
+
 /// the published context sizes of the model families agy serves; an empty or
 /// unrecognised model (agy picking its own default) leaves the limit unreported.
 fn context_window(model: &str) -> Option<u64> {
@@ -486,8 +499,7 @@ impl Normalizer {
                     events.push(AgentEvent::TextDelta { text: text.into() });
                 }
                 if state == "DONE"
-                    && let Some(tokens) =
-                        step.pointer("/usage/input_tokens").and_then(Value::as_u64)
+                    && let Some(tokens) = context_tokens(step)
                 {
                     events.push(AgentEvent::ContextUsage {
                         tokens: Some(tokens),
@@ -921,6 +933,27 @@ mod tests {
             [AgentEvent::ContextUsage {
                 tokens: Some(18171),
                 window: None
+            }]
+        );
+    }
+
+    #[test]
+    fn context_usage_counts_cached_tokens() {
+        let mut normalizer = Normalizer::new("gemini-3.8-flash".into(), "/w".into());
+        let events = normalizer.normalize(&json!({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 7,
+                "state": "DONE",
+                "step_type": "agent_response",
+                "usage": {"input_tokens": 2573, "cache_read_tokens": 16268, "output_tokens": 127}
+            }
+        }));
+        assert_eq!(
+            events,
+            [AgentEvent::ContextUsage {
+                tokens: Some(18841),
+                window: Some(1_048_576)
             }]
         );
     }

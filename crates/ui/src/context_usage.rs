@@ -82,6 +82,18 @@ struct UsageCard {
     _subscription: gpui::Subscription,
 }
 
+fn with_separators(count: u64) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 fn details(usage: Option<ContextUsage>) -> String {
     match usage.unwrap_or_default() {
         ContextUsage {
@@ -90,19 +102,25 @@ fn details(usage: Option<ContextUsage>) -> String {
         } if window > 0 => {
             format!(
                 "{} / {} tokens\n{} tokens remaining",
-                tokens,
-                window,
-                window.saturating_sub(tokens)
+                with_separators(tokens),
+                with_separators(window),
+                with_separators(window.saturating_sub(tokens))
             )
         }
         ContextUsage {
             tokens: Some(tokens),
             ..
-        } => format!("{tokens} tokens used\nContext limit not reported"),
+        } => format!(
+            "{} tokens used\nContext limit not reported",
+            with_separators(tokens)
+        ),
         ContextUsage {
             window: Some(window),
             ..
-        } if window > 0 => format!("{window} token capacity\nWaiting for context usage"),
+        } if window > 0 => format!(
+            "{} token capacity\nWaiting for context usage",
+            with_separators(window)
+        ),
         _ => "Context usage not reported by this harness yet".into(),
     }
 }
@@ -111,7 +129,7 @@ impl Render for UsageCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         let card = crate::popover::popover_card(theme)
-            .w(px(260.0))
+            .max_w(px(260.0))
             .p(px(12.0))
             .flex()
             .flex_col()
@@ -162,6 +180,21 @@ mod tests {
                 window: Some(0)
             }))
             .contains("limit not reported")
+        );
+    }
+
+    #[test]
+    fn token_counts_are_grouped_by_thousands() {
+        assert_eq!(with_separators(0), "0");
+        assert_eq!(with_separators(999), "999");
+        assert_eq!(with_separators(5417), "5,417");
+        assert_eq!(with_separators(1_048_576), "1,048,576");
+        assert_eq!(
+            details(Some(ContextUsage {
+                tokens: Some(5417),
+                window: Some(1_048_576)
+            })),
+            "5,417 / 1,048,576 tokens\n1,043,159 tokens remaining"
         );
     }
 }
