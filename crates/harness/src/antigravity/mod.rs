@@ -9,9 +9,11 @@
 //!   switches on print mode must be the last argument.
 //! - without `--add-dir <cwd>` the file tools write into agy's own scratch
 //!   project instead of the session's repo.
-//! - headless mode cannot ask for permission: anything the chosen mode does not
-//!   allow is auto-denied and listed in `result.denied_actions`, so the only
-//!   lever is picking the mode up front.
+//! - headless mode cannot ask for permission: anything not pre-approved is
+//!   auto-denied and listed in `result.denied_actions`, so runs skip
+//!   permissions outright and only agy's own deny rules can still block a tool.
+//! - the wire reports token counts but no context window, so windows come from
+//!   a per-family table.
 //! - stdin content blocks are text-only, so image attachments stay path refs
 //!   inside the prompt text.
 
@@ -137,11 +139,9 @@ fn build_command(exe: &Path, request: &RunRequest, model: Option<&str>) -> Comma
     if let Some(resume) = request.resume.as_deref().filter(|r| !r.is_empty()) {
         cmd.args(["--conversation", resume]);
     }
-    if request.auto_approve {
-        cmd.arg("--dangerously-skip-permissions");
-    } else {
-        cmd.args(["--mode", "accept-edits"]);
-    }
+    // zeron has no approval ui and agy's headless mode auto-denies anything it
+    // would prompt for, so tools are always approved (parity with claude/codex)
+    cmd.arg("--dangerously-skip-permissions");
     cmd.arg("-p=");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -384,6 +384,19 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Str
     let _ = stdin.shutdown().await;
 }
 
+/// the published context sizes of the model families agy serves; an empty or
+/// unrecognised model (agy picking its own default) leaves the limit unreported.
+fn context_window(model: &str) -> Option<u64> {
+    [
+        ("gemini-", 1_048_576),
+        ("claude-", 200_000),
+        ("gpt-oss-", 131_072),
+    ]
+    .into_iter()
+    .find(|(family, _)| model.starts_with(family))
+    .map(|(_, window)| window)
+}
+
 struct Normalizer {
     model: String,
     cwd: String,
@@ -478,7 +491,7 @@ impl Normalizer {
                 {
                     events.push(AgentEvent::ContextUsage {
                         tokens: Some(tokens),
-                        window: None,
+                        window: context_window(&self.model),
                     });
                 }
                 events
@@ -549,8 +562,7 @@ impl Normalizer {
         if !denied.is_empty() {
             events.push(AgentEvent::Error {
                 message: format!(
-                    "Antigravity blocked {} because headless mode can't ask for permission. \
-                     Turn on auto-approve for this session or add an allow rule to agy's settings.json.",
+                    "Antigravity denied {}. Check the deny rules under permissions in agy's settings.json.",
                     denied.join(", ")
                 ),
             });
@@ -875,6 +887,41 @@ mod tests {
             json!({"tool_name": "generate_image", "tool_info": {"parameters": {"Prompt": "fox"}}});
         assert!(
             matches!(decode_tool(&other), ToolCall::Unknown { name, .. } if name == "generate_image")
+        );
+    }
+
+    #[test]
+    fn context_usage_carries_the_model_family_window() {
+        let step = json!({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 1,
+                "state": "DONE",
+                "step_type": "agent_response",
+                "usage": {"input_tokens": 18171}
+            }
+        });
+        let usage = |model: &str| Normalizer::new(model.into(), "/w".into()).normalize(&step);
+        assert_eq!(
+            usage("gemini-3.8-flash"),
+            [AgentEvent::ContextUsage {
+                tokens: Some(18171),
+                window: Some(1_048_576)
+            }]
+        );
+        assert_eq!(
+            usage("claude-sonnet-4-6"),
+            [AgentEvent::ContextUsage {
+                tokens: Some(18171),
+                window: Some(200_000)
+            }]
+        );
+        assert_eq!(
+            usage(""),
+            [AgentEvent::ContextUsage {
+                tokens: Some(18171),
+                window: None
+            }]
         );
     }
 

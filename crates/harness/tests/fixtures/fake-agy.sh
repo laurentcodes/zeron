@@ -26,6 +26,7 @@ done
 has "$args" "--input-format stream-json" || { echo "missing --input-format stream-json" >&2; exit 2; }
 has "$args" "--output-format stream-json" || { echo "missing --output-format stream-json" >&2; exit 2; }
 has "$args" "--add-dir " || { echo "missing --add-dir" >&2; exit 2; }
+has "$args" "--dangerously-skip-permissions" || { echo "missing --dangerously-skip-permissions" >&2; exit 2; }
 case "$args" in
   *" -p=") ;;
   *) echo "-p= must be the last argument" >&2; exit 2 ;;
