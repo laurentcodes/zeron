@@ -576,6 +576,21 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zeron_harness::OpencodeHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zeron_harness::OpencodeHarness::new()) as Arc<dyn Harness>)),
     );
+    // agy's print mode only takes prompts between turns, and effort is baked
+    // into its model ids rather than offered as a ladder.
+    registry.register_lazy(
+        HarnessDescriptor {
+            id: HarnessId::Antigravity,
+            name: "Antigravity".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::TurnBoundary,
+            reasoning_levels: Vec::new(),
+            installed: true,
+            enabled: None,
+        },
+        Box::new(|| zeron_harness::AntigravityHarness::new().installed()),
+        Box::new(|| Ok(Arc::new(zeron_harness::AntigravityHarness::new()) as Arc<dyn Harness>)),
+    );
     registry
 }
 
@@ -655,7 +670,8 @@ mod tests {
                 HarnessId::Grok,
                 HarnessId::Hermes,
                 HarnessId::Pi,
-                HarnessId::Opencode
+                HarnessId::Opencode,
+                HarnessId::Antigravity
             ]
         );
         assert!(registry.resolve(HarnessId::Mock).is_ok());
@@ -708,6 +724,11 @@ mod tests {
                 ReasoningLevel::Max,
             ]
         );
+        let antigravity = registry.resolve(HarnessId::Antigravity).unwrap();
+        assert_eq!(antigravity.id(), HarnessId::Antigravity);
+        assert_eq!(antigravity.display_name(), "Antigravity");
+        assert_eq!(antigravity.steering_mode(), SteeringMode::TurnBoundary);
+        assert!(antigravity.reasoning_levels().is_empty());
         let pi = registry.resolve(HarnessId::Pi).unwrap();
         assert_eq!(pi.id(), HarnessId::Pi);
         assert_eq!(pi.display_name(), "Pi");

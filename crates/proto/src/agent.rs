@@ -20,6 +20,9 @@ pub enum HarnessId {
     /// protocol (`opencode serve` — the same wire the opencode desktop app
     /// speaks).
     Opencode,
+    /// google's antigravity agent, driven natively over `agy`'s stream-json
+    /// print mode.
+    Antigravity,
     /// Test harness; never shown in production pickers.
     Mock,
 }

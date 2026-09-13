@@ -70,6 +70,7 @@ enum HarnessCatalog {
         "pi": "Pi",
         "cursor": "Cursor",
         "opencode": "OpenCode",
+        "antigravity": "Antigravity",
         "mock": "Mock",
     ]
 
@@ -131,6 +132,18 @@ enum HarnessCatalog {
                 ModelInfo(id: "opencode/hy3-free", label: "Hy3 Free",
                           description: "Free tier on OpenCode Zen",
                           reasoningLevels: ["low", "medium", "high"]),
+            ]
+        case "antigravity":
+            // static fallback only; a reachable host answers with its live `agy models` listing
+            return [
+                ModelInfo(id: "gemini-3.8-flash", label: "Gemini 3.8 Flash",
+                          description: "Google's fast Gemini model through Antigravity",
+                          reasoningLevels: ["low", "medium", "high"]),
+                ModelInfo(id: "gemini-3.1-pro", label: "Gemini 3.1 Pro",
+                          description: "Google's most capable Gemini model through Antigravity",
+                          reasoningLevels: ["low", "high"]),
+                ModelInfo(id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Thinking)",
+                          description: "Anthropic's model through Antigravity", reasoningLevels: []),
             ]
         case "codex":
             return [
