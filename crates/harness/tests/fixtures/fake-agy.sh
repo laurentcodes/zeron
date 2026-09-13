@@ -16,6 +16,12 @@ if [ "$1" = "models" ]; then
   exit 0
 fi
 
+if has "$args" "-p=/skills"; then
+  has "$args" "--output-format json" || { echo "/skills listing needs --output-format json" >&2; exit 2; }
+  emit '{"conversation_id":"","status":"SUCCESS","response":"","command":{"name":"skills","data":{"skills":[{"name":"agy-customizations","description":"Comprehensive guide to the Antigravity customization system. Use to explain how customizations work.","path":"/b/agy-customizations/SKILL.md","builtin":true,"model_invocable":true},{"name":"animate","description":"Design and build web animations that feel right","path":"/g/animate/SKILL.md","builtin":false,"model_invocable":true},{"name":"animate","description":"duplicate from a lower-priority root","path":"/h/animate/SKILL.md","builtin":false,"model_invocable":true},{"name":" ","description":"blank names are skipped","path":"/x/SKILL.md","builtin":false,"model_invocable":true}]}}}'
+  exit 0
+fi
+
 model=""
 prev=""
 for arg in "$@"; do

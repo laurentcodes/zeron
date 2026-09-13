@@ -31,7 +31,8 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode, ToolCall,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand,
+    SteeringMode, ToolCall,
 };
 
 use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
@@ -61,6 +62,7 @@ pub struct AntigravityHarness {
     executable: Option<PathBuf>,
     kill_grace: Duration,
     models_cache: tokio::sync::OnceCell<Vec<Model>>,
+    commands_cache: tokio::sync::OnceCell<Vec<SlashCommand>>,
 }
 
 impl Default for AntigravityHarness {
@@ -69,6 +71,7 @@ impl Default for AntigravityHarness {
             executable: None,
             kill_grace: Duration::from_secs(3),
             models_cache: tokio::sync::OnceCell::new(),
+            commands_cache: tokio::sync::OnceCell::new(),
         }
     }
 }
@@ -114,6 +117,77 @@ impl AntigravityHarness {
             .await
             .map_err(|_| HarnessError::Protocol("agy models timed out".into()))??;
         Ok(parse_models(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    /// `/skills` is answered by the cli itself without a model turn. the cli's
+    /// own built-in commands (`/usage`, `/model`, …) are refused under
+    /// `--input-format stream-json`, so only skills are offered. it runs from
+    /// home because the command list isn't scoped to a session, so workspace
+    /// skills don't appear here but still expand when typed.
+    async fn discover_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+        let exe = self.resolve_executable()?;
+        let mut cmd = Command::new(&exe);
+        crate::compose_child_path(&mut cmd, &exe);
+        cmd.args([
+            "--output-format",
+            "json",
+            "--print-timeout",
+            "1m",
+            "-p=/skills",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+        if let Some(home) = std::env::var_os("HOME") {
+            cmd.current_dir(home);
+        }
+        let output = tokio::time::timeout(Duration::from_secs(20), cmd.output())
+            .await
+            .map_err(|_| HarnessError::Protocol("agy /skills listing timed out".into()))??;
+        let listing: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|e| HarnessError::Protocol(format!("agy /skills listing: {e}")))?;
+        Ok(parse_skill_commands(&listing))
+    }
+}
+
+fn parse_skill_commands(listing: &Value) -> Vec<SlashCommand> {
+    let mut seen = HashSet::new();
+    listing
+        .pointer("/command/data/skills")
+        .and_then(Value::as_array)
+        .map(|skills| skills.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|skill| {
+            let name = skill
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())?;
+            if !seen.insert(name.to_owned()) {
+                return None;
+            }
+            let description = skill
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(SlashCommand {
+                name: name.to_owned(),
+                description: first_sentence(description),
+                input_hint: None,
+            })
+        })
+        .collect()
+}
+
+/// skill descriptions are model-facing paragraphs; the picker row only has
+/// room for the opening sentence.
+fn first_sentence(text: &str) -> String {
+    let text = text.trim();
+    match text.find(". ") {
+        Some(end) => text[..=end].to_owned(),
+        None => text.to_owned(),
     }
 }
 
@@ -293,6 +367,17 @@ impl Harness for AntigravityHarness {
             }
             _ => Ok(static_models()),
         }
+    }
+
+    async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+        if let Some(commands) = self.commands_cache.get() {
+            return Ok(commands.clone());
+        }
+        let commands = self.discover_commands().await?;
+        if !commands.is_empty() {
+            let _ = self.commands_cache.set(commands.clone());
+        }
+        Ok(commands)
     }
 
     async fn run(
@@ -830,6 +915,36 @@ async fn start_next_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skills_listing_maps_to_commands_with_short_descriptions() {
+        let listing = json!({
+            "status": "SUCCESS",
+            "command": {"name": "skills", "data": {"skills": [
+                {"name": "generative_ui", "description": "How to render rich widgets inline. Use this skill when you want diagrams.", "builtin": true},
+                {"name": "find-skills", "description": "Helps users discover skills", "builtin": false},
+                {"name": "find-skills", "description": "duplicate", "builtin": false},
+                {"name": "", "description": "no name"}
+            ]}}
+        });
+        let commands = parse_skill_commands(&listing);
+        assert_eq!(
+            commands,
+            [
+                SlashCommand {
+                    name: "generative_ui".into(),
+                    description: "How to render rich widgets inline.".into(),
+                    input_hint: None,
+                },
+                SlashCommand {
+                    name: "find-skills".into(),
+                    description: "Helps users discover skills".into(),
+                    input_hint: None,
+                },
+            ]
+        );
+        assert!(parse_skill_commands(&json!({"status": "ERROR"})).is_empty());
+    }
 
     #[test]
     fn groups_effort_variants_and_skips_the_progress_line() {

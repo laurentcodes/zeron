@@ -256,6 +256,29 @@ async fn interrupt_ends_the_run_as_interrupted() {
 }
 
 #[tokio::test]
+async fn skills_listing_becomes_slash_commands() {
+    let commands = harness().commands().await.unwrap();
+    let names: Vec<&str> = commands
+        .iter()
+        .map(|command| command.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["agy-customizations", "animate"],
+        "deduped by name in listing order, blank names dropped"
+    );
+    assert_eq!(
+        commands[0].description,
+        "Comprehensive guide to the Antigravity customization system."
+    );
+    assert_eq!(
+        commands[1].description,
+        "Design and build web animations that feel right"
+    );
+    assert!(commands.iter().all(|command| command.input_hint.is_none()));
+}
+
+#[tokio::test]
 async fn effort_variants_group_into_one_model_with_a_reasoning_ladder() {
     let models = harness().models().await.unwrap();
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
