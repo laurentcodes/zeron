@@ -33,6 +33,7 @@ mod devin_models;
 mod normalize;
 mod subagent;
 mod subagent_devin;
+mod system_message;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -57,9 +58,14 @@ use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_ch
 use normalize::{map_update, parse_commands, preferred_allow_option};
 use subagent::SubagentTracker;
 use subagent_devin::DevinTracker;
+use system_message::strip_system_message_echoes;
 
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+/// the 800mb agy_acp_server bundle measured 26-32s from spawn to the
+/// `session/new` reply (1.1.1, apple silicon), so the default bound never let
+/// its live catalog through and the picker sat on the static fallback.
+const ANTIGRAVITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(90);
 /// Per-agent configuration: which binary to spawn and what to tell the picker.
 struct AcpAgentSpec {
     id: HarnessId,
@@ -855,7 +861,8 @@ pub struct AcpHarness {
     /// Discovery result cache: the advertised commands survive across calls.
     commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
     /// Share successful catalogs only with overlapping requests. Later picker
-    /// opens must see account changes and newly available models.
+    /// opens must see account changes and newly available models, but a failed
+    /// re-probe answers with this last live catalog rather than the static one.
     models_cache: tokio::sync::Mutex<Option<(Instant, Vec<Model>)>>,
     devin_models: devin_models::Catalog,
 }
@@ -903,6 +910,7 @@ impl AcpHarness {
     /// google antigravity over its acp server (`agy_acp_server`).
     pub fn antigravity() -> Self {
         Self::with_spec(antigravity_spec())
+            .with_model_discovery_timeout(ANTIGRAVITY_DISCOVERY_TIMEOUT)
     }
 
     /// sign the agent out with acp `logout`, clearing the credentials its
@@ -1305,7 +1313,12 @@ impl AcpHarness {
             }
             Ok::<Vec<SlashCommand>, HarnessError>(commands)
         };
-        let result = tokio::time::timeout(Duration::from_secs(10), discovery).await;
+        let timeout = if self.spec.id == HarnessId::Antigravity {
+            ANTIGRAVITY_DISCOVERY_TIMEOUT
+        } else {
+            DEFAULT_MODEL_DISCOVERY_TIMEOUT
+        };
+        let result = tokio::time::timeout(timeout, discovery).await;
         shutdown_child(&mut child, self.kill_grace).await;
         match result {
             Ok(inner) => inner,
@@ -1687,10 +1700,10 @@ impl Harness for AcpHarness {
                 *latest = Some((Instant::now(), models.clone()));
                 Ok(models)
             }
-            Ok(_) => Ok((self.spec.models)()),
+            Ok(_) => Ok(last_live_or_static(latest.as_ref(), self.spec.models)),
             Err(error) => {
                 tracing::warn!(harness = %self.spec.display_name, %error, "Model discovery failed; using fallback");
-                Ok((self.spec.models)())
+                Ok(last_live_or_static(latest.as_ref(), self.spec.models))
             }
         }
     }
@@ -1758,10 +1771,15 @@ impl Harness for AcpHarness {
             stderr_tail,
         }));
 
-        Ok(futures::stream::unfold(event_rx, |mut rx| async move {
+        let events = futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))
         })
-        .boxed())
+        .boxed();
+        Ok(if self.spec.id == HarnessId::Antigravity {
+            strip_system_message_echoes(events)
+        } else {
+            events
+        })
     }
 }
 
@@ -1854,6 +1872,13 @@ fn new_message_id() -> String {
 fn rotate(id: &mut String) -> (String, String) {
     let prev = std::mem::replace(id, new_message_id());
     (prev, id.clone())
+}
+
+fn last_live_or_static(
+    last_live: Option<&(Instant, Vec<Model>)>,
+    static_catalog: fn() -> Vec<Model>,
+) -> Vec<Model> {
+    last_live.map_or_else(static_catalog, |(_, models)| models.clone())
 }
 
 async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEvent) -> bool {
