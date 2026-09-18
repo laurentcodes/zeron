@@ -46,6 +46,7 @@ use futures::stream::BoxStream;
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
@@ -917,7 +918,8 @@ impl AcpHarness {
     /// sign-in stored.
     pub async fn sign_out(&self) -> Result<(), HarnessError> {
         let home = std::env::var("HOME").ok();
-        let (mut child, _stderr) = self.spawn_agent(home.as_deref(), false, &[]).await?;
+        let (mut child, _stderr, _sign_in_prompted) =
+            self.spawn_agent(home.as_deref(), false, &[]).await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => RpcClient::new(stdin, stdout),
             _ => {
@@ -1220,7 +1222,7 @@ impl AcpHarness {
         cwd: Option<&str>,
         block_on_install: bool,
         extra_args: &[String],
-    ) -> Result<(Child, crate::StderrTail), HarnessError> {
+    ) -> Result<(Child, crate::StderrTail, CancellationToken), HarnessError> {
         let (exe, args) = self.resolve_program(block_on_install).await?;
         let mut cmd = Command::new(&exe);
         cmd.args(args);
@@ -1231,6 +1233,11 @@ impl AcpHarness {
         }
         if self.spec.id == HarnessId::Antigravity {
             cmd.env("GEMINI_HOME", antigravity_paths::home()?);
+            // the server launches its google sign-in from `session/new` when a
+            // token can't be refreshed silently, so background model/command
+            // probes popped a browser tab unprompted. sign-in only happens
+            // from settings, which runs its own flow.
+            cmd.env("BROWSER", noop_browser()?);
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1244,17 +1251,23 @@ impl AcpHarness {
             }
         })?;
         let stderr_tail = crate::StderrTail::default();
+        let sign_in_prompted = CancellationToken::new();
         if let Some(stderr) = child.stderr.take() {
             let tail = stderr_tail.clone();
+            let prompted = sign_in_prompted.clone();
+            let harness = self.spec.id;
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     tracing::debug!(target: "zeron_harness::acp", "stderr: {line}");
                     tail.push(&line);
+                    if is_sign_in_prompt(harness, &line) {
+                        prompted.cancel();
+                    }
                 }
             });
         }
-        Ok((child, stderr_tail))
+        Ok((child, stderr_tail, sign_in_prompted))
     }
 
     /// Short-lived discovery run for [`Harness::commands`]: initialize, scan
@@ -1263,7 +1276,7 @@ impl AcpHarness {
     /// refuses sessions before login still surfaces whatever the handshake
     /// advertised.
     async fn discover_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        let (mut child, _stderr) = self.spawn_agent(None, false, &[]).await?;
+        let (mut child, _stderr, sign_in_prompted) = self.spawn_agent(None, false, &[]).await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => RpcClient::new(stdin, stdout),
             _ => {
@@ -1318,6 +1331,8 @@ impl AcpHarness {
         } else {
             DEFAULT_MODEL_DISCOVERY_TIMEOUT
         };
+        let discovery =
+            unless_sign_in_prompted(discovery, &sign_in_prompted, self.spec.display_name);
         let result = tokio::time::timeout(timeout, discovery).await;
         shutdown_child(&mut child, self.kill_grace).await;
         match result {
@@ -1332,7 +1347,7 @@ impl AcpHarness {
     /// wire is the source of truth — the spec's static catalog only enriches
     /// matching entries and names the pick when the agent advertises nothing.
     async fn discover_models(&self) -> Result<Vec<Model>, HarnessError> {
-        let (mut child, stderr_tail) = self.spawn_agent(None, false, &[]).await?;
+        let (mut child, stderr_tail, sign_in_prompted) = self.spawn_agent(None, false, &[]).await?;
         let (client, _incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => RpcClient::new(stdin, stdout),
             _ => {
@@ -1365,6 +1380,8 @@ impl AcpHarness {
             }
             Ok::<Vec<Model>, HarnessError>(models)
         };
+        let discovery =
+            unless_sign_in_prompted(discovery, &sign_in_prompted, self.spec.display_name);
         let result = tokio::time::timeout(self.model_discovery_timeout, discovery).await;
         shutdown_child(&mut child, self.kill_grace).await;
         match result {
@@ -1737,7 +1754,8 @@ impl Harness for AcpHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-        let (mut child, stderr_tail) = self.spawn_agent(Some(&request.cwd), true, &[]).await?;
+        let (mut child, stderr_tail, sign_in_prompted) =
+            self.spawn_agent(Some(&request.cwd), true, &[]).await?;
         let stdin = child
             .stdin
             .take()
@@ -1769,6 +1787,7 @@ impl Harness for AcpHarness {
             kill_grace: self.kill_grace,
             handshake_timeout: self.handshake_timeout,
             stderr_tail,
+            sign_in_prompted,
         }));
 
         let events = futures::stream::unfold(event_rx, |mut rx| async move {
@@ -1809,6 +1828,7 @@ struct Session {
     kill_grace: Duration,
     handshake_timeout: Duration,
     stderr_tail: crate::StderrTail,
+    sign_in_prompted: CancellationToken,
 }
 
 fn initialize_params(harness: HarnessId) -> Value {
@@ -2432,12 +2452,68 @@ async fn new_session(
 ) -> Result<Value, HarnessError> {
     match request_draining(client, incoming, "session/new", params).await {
         Err(error) if signs_in_from_settings && is_auth_required(&error) => {
-            Err(HarnessError::Protocol(format!(
-                "{agent_name} isn't signed in. Turn it on again in Settings → Agents to sign in."
-            )))
+            Err(not_signed_in(agent_name))
         }
         other => other,
     }
+}
+
+fn not_signed_in(agent_name: &str) -> HarnessError {
+    HarnessError::Protocol(format!(
+        "{agent_name} isn't signed in. Turn it on again in Settings → Agents to sign in."
+    ))
+}
+
+/// antigravity blocks `session/new` for up to 300s on its loopback sign-in
+/// redirect, which a suppressed browser never completes.
+fn is_sign_in_prompt(harness: HarnessId, stderr_line: &str) -> bool {
+    harness == HarnessId::Antigravity
+        && stderr_line.contains("Open the following link to authenticate the ACP server")
+}
+
+async fn unless_sign_in_prompted<T>(
+    work: impl std::future::Future<Output = Result<T, HarnessError>>,
+    sign_in_prompted: &CancellationToken,
+    agent_name: &str,
+) -> Result<T, HarnessError> {
+    tokio::select! {
+        result = work => result,
+        _ = sign_in_prompted.cancelled() => Err(not_signed_in(agent_name)),
+    }
+}
+
+/// python's `webbrowser` honours `BROWSER`, but falls through to the system
+/// opener when the command fails to spawn, so it must name a real executable.
+#[cfg(not(windows))]
+fn noop_browser() -> Result<String, HarnessError> {
+    ["/usr/bin/true", "/bin/true"]
+        .into_iter()
+        .map(Path::new)
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| HarnessError::Protocol("Could not configure browser suppression".into()))
+}
+
+#[cfg(windows)]
+fn noop_browser() -> Result<String, HarnessError> {
+    windows_noop_browser(&std::env::current_exe()?)
+}
+
+#[cfg(any(windows, test))]
+fn windows_noop_browser(executable: &Path) -> Result<String, HarnessError> {
+    let executable = executable.to_str().ok_or_else(|| {
+        HarnessError::Protocol("Browser suppression requires a Unicode executable path".into())
+    })?;
+    // python splits browser alternatives on semicolons and substitutes every
+    // %s, including occurrences in the executable path. fail before spawning
+    // the agent rather than allowing its system-browser fallback.
+    if executable.contains([';', '"', '%']) {
+        return Err(HarnessError::Protocol(
+            "The executable path cannot be used for browser suppression".into(),
+        ));
+    }
+    let executable = executable.replace('\\', "\\\\");
+    Ok(format!("\"{executable}\" --noop-browser %s"))
 }
 
 /// acp reserves -32000 for auth_required.
@@ -2717,6 +2793,7 @@ async fn run_session(session: Session) {
         kill_grace,
         handshake_timeout,
         stderr_tail,
+        sign_in_prompted,
     } = session;
     let RunControls {
         request_input,
@@ -2883,6 +2960,7 @@ async fn run_session(session: Session) {
             init_commands,
         ))
     };
+    let setup = unless_sign_in_prompted(setup, &sign_in_prompted, agent_name);
     let (session_id, steer_ext, init_commands) = tokio::select! {
         res = tokio::time::timeout(handshake_timeout, setup) => {
             let res = res.unwrap_or_else(|_| {
@@ -3843,6 +3921,19 @@ async fn run_session(session: Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_browser_suppression_quotes_the_executable_path() {
+        let command = windows_noop_browser(Path::new(r"C:\Program Files\Zeron\zeron.exe"))
+            .expect("browser command");
+        assert_eq!(
+            command,
+            r#""C:\\Program Files\\Zeron\\zeron.exe" --noop-browser %s"#
+        );
+        for path in [r"C:\semi;colon\zeron.exe", r"C:\percent%s\zeron.exe"] {
+            assert!(windows_noop_browser(Path::new(path)).is_err());
+        }
+    }
 
     fn all_antigravity_auth_methods() -> Value {
         json!({

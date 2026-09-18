@@ -3,7 +3,10 @@
 #
 # mirrors the wire shapes of agy_acp_server 1.1.1: effort baked into model
 # ids, a default/auto_edit/yolo mode select, auth_required (-32000) on
-# session/new for a cwd containing "needs-login", and an `authenticate` that
+# session/new for a cwd containing "needs-login", a browser sign-in on
+# session/new for a cwd containing "stale-login" (or FAKE_AGY_STALE_LOGIN naming
+# a marker file to touch),
+# and an `authenticate` that
 # prints its sign-in url to stderr like the real browser flow. the prompt
 # reply echoes every config option zeron set.
 
@@ -25,7 +28,15 @@ while read -r line; do
     if has "$line" 'reject-model'; then
       REJECT_MODEL=1
     fi
-    if has "$line" 'needs-login' && [ "$AUTHED" -eq 0 ]; then
+    if [ -n "$FAKE_AGY_STALE_LOGIN" ] || has "$line" 'stale-login'; then
+      # the real server opens $BROWSER, prints the link, then waits 300s on
+      # its loopback redirect
+      case "$BROWSER" in /usr/bin/true | /bin/true) ;; *) exit 1 ;; esac
+      "$BROWSER" 'https://accounts.google.com/o/oauth2/auth?client_id=fake&state=test' || exit 1
+      [ -z "$FAKE_AGY_STALE_LOGIN" ] || : >"$FAKE_AGY_STALE_LOGIN"
+      printf 'Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/auth?client_id=fake\n' >&2
+      exec sleep 300
+    elif has "$line" 'needs-login' && [ "$AUTHED" -eq 0 ]; then
       emit "{\"id\":$id,\"error\":{\"code\":-32000,\"message\":\"Authentication required\"}}"
     else
       emit "{\"id\":$id,\"result\":{\"sessionId\":\"agy-1\",\"configOptions\":$OPTIONS}}"
