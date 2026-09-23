@@ -54,7 +54,8 @@ use sha2::{Digest, Sha256};
 
 use zeron_proto::{
     AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind, AgentLoginMode,
-    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, AgentUsageWindow, HarnessId,
+    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, AgentUsageWindow, CodexResetCredit,
+    CodexResetCredits, CodexResetOutcome, HarnessId,
 };
 
 use crate::repos::home_dir;
@@ -69,6 +70,10 @@ const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_RESET_CREDITS_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CODEX_CONSUME_RESET_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 /// The Cursor dashboard's current-period usage RPC (Connect-style POST).
 const CURSOR_CURRENT_PERIOD_USAGE: &str = "aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 const CURSOR_DEFAULT_BACKEND: &str = "https://api2.cursor.sh";
@@ -255,6 +260,7 @@ type CachedUsage = (Option<UsageSnapshot>, Instant);
 struct UsageSnapshot {
     windows: Vec<AgentUsageWindow>,
     plan_label: Option<String>,
+    codex_reset_credits: Option<CodexResetCredits>,
 }
 
 struct Inner {
@@ -371,7 +377,13 @@ impl AgentAccounts {
                         .and_then(|usage| usage.plan_label.clone())
                         .or_else(|| slot.profile.plan.clone()),
                     active,
-                    usage_windows: usage.map(|usage| usage.windows).unwrap_or_default(),
+                    usage_windows: usage
+                        .as_ref()
+                        .map(|usage| usage.windows.clone())
+                        .unwrap_or_default(),
+                    codex_reset_credits: usage
+                        .as_ref()
+                        .and_then(|usage| usage.codex_reset_credits.clone()),
                     display_name: slot.profile.display_name.clone(),
                     organization: slot.profile.organization.clone(),
                     auth_kind: Some(slot.profile.auth_kind),
@@ -391,6 +403,7 @@ impl AgentAccounts {
                     plan_label: u.profile.plan.clone(),
                     active: true,
                     usage_windows: Vec::new(),
+                    codex_reset_credits: None,
                     display_name: u.profile.display_name.clone(),
                     organization: u.profile.organization.clone(),
                     auth_kind: Some(u.profile.auth_kind),
@@ -1380,10 +1393,15 @@ impl AgentAccounts {
             .json()
             .await
             .ok()?;
-        let rl = body.get("rate_limit")?;
+        if let Some(account_id) = str_field(&body, "account_id")
+            && account_id != slot.account_key
+        {
+            return None;
+        }
+        let rl = body.get("rate_limit");
         let mut windows = Vec::new();
         for key in ["primary_window", "secondary_window"] {
-            if let Some(w) = rl.get(key)
+            if let Some(w) = rl.and_then(|rl| rl.get(key))
                 && let Some(used) = w.get("used_percent").and_then(|v| v.as_f64())
             {
                 let span = w
@@ -1397,17 +1415,112 @@ impl AgentAccounts {
                 });
             }
         }
-        if windows.is_empty() {
-            return None;
-        }
         // Live plan ("free"/"plus"/"pro"…) — beats the login-time JWT claim,
         // so a plan change shows up on the next forced refresh without a
         // re-login.
         let plan_label = codex_plan(str_field(&body, "plan_type").as_deref());
+        let reset_count = body
+            .get("rate_limit_reset_credits")
+            .and_then(|summary| summary.get("available_count"))
+            .and_then(|count| count.as_u64());
+        let codex_reset_credits = match reset_count {
+            Some(0) => Some(CodexResetCredits {
+                available_count: 0,
+                credits: Vec::new(),
+            }),
+            _ => self.codex_reset_credits(slot).await.ok(),
+        };
+        if windows.is_empty() && codex_reset_credits.is_none() {
+            return None;
+        }
         Some(UsageSnapshot {
             windows,
             plan_label,
+            codex_reset_credits,
         })
+    }
+
+    async fn codex_reset_credits(&self, slot: &Slot) -> Result<CodexResetCredits, EngineError> {
+        let (access_token, account_id) = codex_slot_auth(slot)?;
+        let body: serde_json::Value = self
+            .inner
+            .http
+            .get(CODEX_RESET_CREDITS_URL)
+            .bearer_auth(access_token)
+            .header("chatgpt-account-id", account_id)
+            .send()
+            .await
+            .map_err(|e| EngineError::Other(format!("Could not load Codex resets: {e}")))?
+            .error_for_status()
+            .map_err(|e| EngineError::Other(format!("Could not load Codex resets: {e}")))?
+            .json()
+            .await
+            .map_err(|e| EngineError::Other(format!("Could not read Codex resets: {e}")))?;
+        parse_codex_reset_credits(&body)
+            .ok_or_else(|| EngineError::Other("Codex returned invalid reset details.".into()))
+    }
+
+    pub async fn consume_codex_reset_credit(
+        &self,
+        account_id: &str,
+        credit_id: &str,
+        idempotency_key: &str,
+    ) -> Result<CodexResetOutcome, EngineError> {
+        if credit_id.is_empty() || idempotency_key.is_empty() {
+            return Err(EngineError::Other("Select a reset and try again.".into()));
+        }
+        if let Some(detected) = self.detect_codex() {
+            self.snapshot_detected(HarnessId::Codex, &detected)?;
+        }
+        let slot = self
+            .read_slots(HarnessId::Codex)
+            .into_iter()
+            .find(|slot| slot.id == account_id)
+            .ok_or_else(|| EngineError::Other("This Codex account is no longer saved.".into()))?;
+        let (access_token, provider_account_id) = codex_slot_auth(&slot)?;
+        let usage: serde_json::Value = self
+            .inner
+            .http
+            .get(CODEX_USAGE_URL)
+            .bearer_auth(access_token)
+            .header("chatgpt-account-id", provider_account_id)
+            .send()
+            .await
+            .map_err(|e| EngineError::Other(format!("Could not verify Codex account: {e}")))?
+            .error_for_status()
+            .map_err(|e| EngineError::Other(format!("Could not verify Codex account: {e}")))?
+            .json()
+            .await
+            .map_err(|e| EngineError::Other(format!("Could not read Codex account: {e}")))?;
+        if str_field(&usage, "account_id").as_deref() != Some(provider_account_id) {
+            return Err(EngineError::Other(
+                "Codex returned a different account. Refresh Accounts and try again.".into(),
+            ));
+        }
+        let body: serde_json::Value = self
+            .inner
+            .http
+            .post(CODEX_CONSUME_RESET_URL)
+            .bearer_auth(access_token)
+            .header("chatgpt-account-id", provider_account_id)
+            .json(&serde_json::json!({
+                "redeem_request_id": idempotency_key,
+                "credit_id": credit_id,
+            }))
+            .send()
+            .await
+            .map_err(|e| EngineError::Other(format!("Could not use Codex reset: {e}")))?
+            .error_for_status()
+            .map_err(|e| EngineError::Other(format!("Could not use Codex reset: {e}")))?
+            .json()
+            .await
+            .map_err(|e| EngineError::Other(format!("Could not read Codex reset result: {e}")))?;
+        let outcome = str_field(&body, "code")
+            .ok_or_else(|| EngineError::Other("Codex returned an unknown reset result.".into()))?;
+        if outcome == "reset" || outcome == "already_redeemed" {
+            lock(&self.inner.usage_cache).remove(&format!("codex:{}", slot.account_key));
+        }
+        Ok(CodexResetOutcome { outcome })
     }
 
     async fn cursor_usage(&self, slot: &Slot) -> Option<UsageSnapshot> {
@@ -1452,6 +1565,7 @@ impl AgentAccounts {
         cursor_usage_window(&body).map(|window| UsageSnapshot {
             windows: vec![window],
             plan_label: None,
+            codex_reset_credits: None,
         })
     }
 
@@ -1831,6 +1945,54 @@ fn parse_codex_auth(auth: serde_json::Value) -> Option<Detected> {
     })
 }
 
+fn codex_slot_auth(slot: &Slot) -> Result<(&str, &str), EngineError> {
+    let detected = parse_codex_auth(slot.credentials.clone())
+        .ok_or_else(|| EngineError::Other("This Codex login needs to be refreshed.".into()))?;
+    let tokens = slot.credentials.get("tokens");
+    let account_id = tokens
+        .and_then(|tokens| tokens.get("account_id"))
+        .and_then(|v| v.as_str());
+    let access_token = tokens
+        .and_then(|tokens| tokens.get("access_token"))
+        .and_then(|v| v.as_str());
+    match (account_id, access_token) {
+        (Some(account_id), Some(access_token))
+            if !access_token.is_empty()
+                && account_id == slot.account_key
+                && detected.account_key == slot.account_key =>
+        {
+            Ok((access_token, account_id))
+        }
+        _ => Err(EngineError::Other(
+            "This Codex login could not be verified for reset redemption.".into(),
+        )),
+    }
+}
+
+fn parse_codex_reset_credits(body: &serde_json::Value) -> Option<CodexResetCredits> {
+    let credits = body
+        .get("credits")?
+        .as_array()?
+        .iter()
+        .filter(|credit| {
+            credit.get("status").and_then(|v| v.as_str()) == Some("available")
+                && credit.get("reset_type").and_then(|v| v.as_str()) == Some("codex_rate_limits")
+        })
+        .filter_map(|credit| {
+            Some(CodexResetCredit {
+                id: str_field(credit, "id")?,
+                title: str_field(credit, "title").unwrap_or_else(|| "Full reset".into()),
+                description: str_field(credit, "description"),
+                expires_at: parse_when(credit.get("expires_at")),
+            })
+        })
+        .collect::<Vec<_>>();
+    Some(CodexResetCredits {
+        available_count: credits.len() as u64,
+        credits,
+    })
+}
+
 /// ISO string (Claude) or unix seconds (Codex) → timestamp.
 /// The Cursor SDK's credential store (`StoredSdkCredentials`, version 1):
 /// the named user API key its browser login minted, plus identity/expiry.
@@ -1909,6 +2071,7 @@ fn claude_usage_windows(body: &serde_json::Value) -> Option<UsageSnapshot> {
     (!windows.is_empty()).then_some(UsageSnapshot {
         windows,
         plan_label: None,
+        codex_reset_credits: None,
     })
 }
 
@@ -2122,6 +2285,63 @@ fn write_file_atomic(file: &Path, bytes: &[u8], secret: bool) -> Result<(), Engi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_reset_credits_include_only_available_codex_resets() {
+        let body = serde_json::json!({
+            "available_count": 2,
+            "credits": [
+                {
+                    "id": "credit-1",
+                    "reset_type": "codex_rate_limits",
+                    "status": "available",
+                    "title": "Full reset (Weekly + 5 hr)",
+                    "expires_at": "2026-10-04T02:01:00Z"
+                },
+                { "id": "credit-2", "reset_type": "future_type", "status": "available" },
+                { "id": "credit-3", "reset_type": "codex_rate_limits", "status": "redeemed" }
+            ]
+        });
+        let parsed = parse_codex_reset_credits(&body).unwrap();
+        assert_eq!(parsed.available_count, 1);
+        assert_eq!(parsed.credits.len(), 1);
+        assert_eq!(parsed.credits[0].id, "credit-1");
+        assert_eq!(parsed.credits[0].title, "Full reset (Weekly + 5 hr)");
+        assert_eq!(
+            parsed.credits[0].expires_at,
+            Some("2026-10-04T02:01:00Z".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn codex_reset_auth_rejects_an_account_mismatch() {
+        let claims = serde_json::json!({
+            "email": "alice@example.com",
+            "https://api.openai.com/auth": { "chatgpt_account_id": "account-alice" }
+        });
+        let id_token = format!("x.{}.x", BASE64_URL.encode(claims.to_string()));
+        let credentials = serde_json::json!({
+            "tokens": {
+                "id_token": id_token,
+                "access_token": "access-token",
+                "account_id": "account-bob"
+            }
+        });
+        let detected = parse_codex_auth(credentials.clone()).unwrap();
+        let mut slot = Slot {
+            id: slot_id_for(HarnessId::Codex, &detected.account_key),
+            harness: HarnessId::Codex,
+            account_key: detected.account_key,
+            profile: detected.profile,
+            credentials,
+            claude_config: None,
+            saved_at: 0,
+            created_at: None,
+        };
+        assert!(codex_slot_auth(&slot).is_err());
+        slot.credentials["tokens"]["account_id"] = serde_json::json!("account-alice");
+        assert_eq!(codex_slot_auth(&slot).unwrap().1, "account-alice");
+    }
 
     #[test]
     fn plan_labels() {
