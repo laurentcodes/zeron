@@ -198,6 +198,11 @@ fn available_resets(account: &AgentAccount) -> u64 {
         .map_or(0, |summary| summary.available_count)
 }
 
+fn available_resets_label(count: u64) -> SharedString {
+    let noun = if count == 1 { "reset" } else { "resets" };
+    format!("{count} available {noun}").into()
+}
+
 pub fn signs_in(harness: HarnessId) -> bool {
     PROVIDERS
         .iter()
@@ -790,7 +795,7 @@ impl AccountsPage {
                     Ok(result) => {
                         page.reset_dialog = None;
                         page.reset_message = Some(reset_outcome_message(&result.outcome).into());
-                        page.load(force_usage_for(LoadTrigger::PostAction), cx);
+                        page.load(force_usage_for(LoadTrigger::Refresh), cx);
                     }
                     Err(err) => {
                         if let Some(ResetDialog::Confirm { busy, error, .. }) =
@@ -1217,10 +1222,7 @@ impl AccountsPage {
         if reset_count > 0 {
             meta.push(
                 div()
-                    .child(SharedString::from(format!(
-                        "{reset_count} {} saved",
-                        if reset_count == 1 { "reset" } else { "resets" }
-                    )))
+                    .child(available_resets_label(reset_count))
                     .into_any_element(),
             );
         }
@@ -1367,7 +1369,12 @@ impl AccountsPage {
                                 page.close_row_menu(cx);
                                 page.open_resets(&reset_account, cx);
                             }))
-                            .child(SharedString::from("Use a saved reset…")),
+                            .child(div().flex_1().child(available_resets_label(reset_count)))
+                            .child(
+                                crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
+                                    .size(px(14.0))
+                                    .text_color(popup.text_muted),
+                            ),
                     )
                 })
                 .when(account.switchable, |menu| {
