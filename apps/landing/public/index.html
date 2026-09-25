@@ -151,38 +151,36 @@
 
   /* ── hero ────────────────────────────────────────────── */
   .hero { position: relative; overflow: hidden; }
+  /* above the glyph field, which is prepended into .hero */
   .hero-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-    align-items: center;
-    gap: 40px;
-    padding: 72px 32px 40px;
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    padding: 88px 32px 56px;
   }
-  h1 {
-    font-size: clamp(38px, 4.8vw, 58px);
-    font-weight: 600;
-    letter-spacing: -0.035em;
-    line-height: 1.05;
+  .hero-copy { max-width: 600px; margin: 0 auto; }
+  /* one paragraph: the bold lead in --ink, the rest in --dim */
+  .hero h1 {
+    font-size: clamp(21px, 2.1vw, 25px);
+    font-weight: 500;
+    letter-spacing: -0.022em;
+    line-height: 1.38;
+    color: var(--dim);
     text-wrap: balance;
   }
-  .hero p.sub {
-    margin-top: 22px;
-    max-width: 460px;
-    font-size: 16px;
-    line-height: 1.65;
-    color: var(--dim);
-    text-wrap: pretty;
-  }
+  .hero h1 b { font-weight: 600; color: var(--ink); }
   .hero .cta-row {
-    margin-top: 36px;
+    margin-top: 28px;
     display: flex;
     align-items: center;
-    gap: 14px;
+    justify-content: center;
+    gap: 12px 20px;
     flex-wrap: wrap;
   }
+  .hero .btn { height: 34px; padding: 0 15px; border-radius: 10px; }
   .cta-ver {
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: 11.5px;
     color: var(--faint);
   }
   .all-downloads { font-size: 13.5px; color: var(--dim); transition: color .15s; }
@@ -193,6 +191,7 @@
     margin-top: 16px;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 30px;
     flex-wrap: wrap;
   }
@@ -211,27 +210,8 @@
   .used-by-logos img { width: auto; opacity: 0; transition: opacity .2s; }
   .used-by-logos a:hover::after { opacity: 0; }
   .used-by-logos a:hover img { opacity: 1; }
-  .hero-ascii {
-    justify-self: end;
-    font-family: var(--mono);
-    font-size: 7.6px;
-    font-weight: 400;
-    line-height: 1.25;
-    font-variant-ligatures: none;
-    font-feature-settings: "liga" 0, "calt" 0, "dlig" 0;
-    white-space: pre;
-    user-select: none;
-    pointer-events: none;
-    background: linear-gradient(165deg, #a986ff 0%, #8b5cf6 40%, #4b2b96 80%, #241548 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-mask-image: radial-gradient(85% 85% at 55% 45%, #000 55%, transparent 96%);
-    mask-image: radial-gradient(85% 85% at 55% 45%, #000 55%, transparent 96%);
-  }
   @media (max-width: 900px) {
-    .hero-grid { grid-template-columns: 1fr; padding-top: 48px; }
-    .hero-ascii { display: none; }
+    .hero-grid { padding-top: 56px; }
   }
 
   /* ── shot ────────────────────────────────────────────── */
@@ -259,6 +239,7 @@
   .agents {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 26px;
     margin-bottom: 32px;
     flex-wrap: wrap;
@@ -721,8 +702,8 @@
     position: relative;
   }
   .closing .wrap { position: relative; z-index: 1; }
-  /* ascii hands: rendered like the edge railing — same cell grid, glyph
-     ramp, colour and top/bottom fade; the hand image is the density map */
+  /* ascii hands: a glyph density ramp over a noise field, with the hand
+     image as the density map, faded top and bottom */
   .hand-ascii {
     position: absolute;
     z-index: 0;
@@ -756,31 +737,14 @@
   .footer-inner .gh-icon { padding: 0; }
   footer a:hover { color: var(--dim); }
 
-  /* ── edge ascii (app preview only) ───────────────────── */
-  .shot .wrap { z-index: 1; }
-  .dither {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 140px;
-    z-index: 0;
-    pointer-events: none;
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 20%, #000 80%, transparent 100%);
-    mask-image: linear-gradient(to bottom, transparent 0%, #000 20%, #000 80%, transparent 100%);
-  }
-  .dither-left { left: 0; }
-  .dither-right { right: 0; }
-  .dither canvas { width: 100%; height: 100%; display: block; }
-  @media (max-width: 1440px) { .dither { display: none; } }
-
   /* ── mobile ──────────────────────────────────────────── */
   @media (max-width: 640px) {
     .wrap { padding: 0 20px; }
     .nav-inner { height: 56px; }
     .hero-grid { padding: 36px 20px 32px; gap: 44px; }
-    h1 { font-size: clamp(32px, 9vw, 38px); }
-    .hero p.sub { font-size: 15px; }
-    .hero .cta-row { margin-top: 28px; }
+    .hero-grid { text-align: left; }
+    .hero-copy { margin: 0; }
+    .hero .agents, .hero .cta-row, .used-by-logos { justify-content: flex-start; }
     .agents { gap: 22px; margin-bottom: 26px; }
     .agent-icon { width: 20px; height: 20px; }
     .shot { padding: 28px 0 0; }
@@ -828,7 +792,7 @@
 
   <header class="hero">
     <div class="wrap hero-grid">
-      <div>
+      <div class="hero-copy">
         <div class="agents" aria-label="Supported agents">
           <span class="agent-icon" title="Claude Code" style="--icon: url('/assets/icons/claude-mark.svg')"></span>
           <span class="agent-icon" title="Codex" style="--icon: url('/assets/icons/openai-mark.svg')"></span>
@@ -839,11 +803,11 @@
           <span class="agent-icon" title="Devin" style="--icon: url('/assets/icons/devin-mark.svg')"></span>
           <span class="agent-icon" title="OpenCode" style="--icon: url('/assets/icons/opencode-mark.svg')"></span>
         </div>
-        <h1>Access your agents from any device.</h1>
-        <p class="sub">
-          Zeron runs Claude Code, Codex, Grok, Hermes and Pi on your
-          machines. You steer them from one window, on any device, live.
-        </p>
+        <h1>
+          <b>Access your agents from any device.</b> Zeron runs Claude Code,
+          Codex, Grok, Hermes, Pi and more on your machines. You steer them
+          from one window, on any device, live.
+        </h1>
         <div class="cta-row">
           <a class="btn" id="hero-download" href="#downloads">Download</a>
           <a class="all-downloads" href="#downloads">All downloads ↓</a>
@@ -858,58 +822,10 @@
           </div>
         </div>
       </div>
-      <pre class="hero-ascii" aria-hidden="true">++=========+=====+++++++++++******+++++++++++++++++++++*****#############%%######***#######*#%#######****#####
-..=+=====+=======++++++++++++++*****+++++++++++++++++*++****#############%####%%%@@@%%#*%#########***######***
-+===++++====++++++++++++++++++++********+++++++++***++*+*****###########%%%%%@@@@@@@@@@%#*####*##########*#**#
-***+++++++==+++++++++++++++**++++**#**##*+*+++++++*+++********#*#####%%%%@@@@@@@@@@@%%%%%%###*#%*=+#*****++###
-*****+++++++==++++++++**************#####*****************#*****##%%%%@%@@@@@%%%%%##%###%%##*++++*****######*#
-*********++++++++++++*************#######******%%###*******########%%%%%%@@%%%######%%#*+++++******###%%%%%##*
-**********++++++++***********#***###%@%*+#%###*%*:.-%##*##*#########%%%%%%###%%%%%%%#+++++++++****##%%%%%%####
-**********+++++***********###***###%@@@#**@@@*=+:  -**#@@@%#######%##########%%%%#%*++***++++++++*#%%%########
-****####***********###**##***###@+--*@#==#%#%@@%#:::=+#*++-:=+=###########%%%%%%#=*******+++++++++##%#########
-#**####***********#########%##%%@==::=.   :--=*@%%%%@@@@%#- .:+%%%######%%##******+****+**+++*******#######%##
-*####****#*********#####**+#%@@@@#*++=-=-- .-:=#%@@@@@@@@@#=.  .:-######****++*********************+**########
--+##+*###*#********####*%*=#@@#=++*%@%%##**%%##@@@@@@@@@@@@@%= .. =*#######*+******************#******##**####
-+===-=**###**#****##%%%#*..-*#-  :------*+-=*%@@@%*+==+***#@@@* .:.+*######**+++++******#***#####********###**
-+++++++++*#######%#***##++**#*-.     ..:-+=*##*-::::.     .=*%%*:-+***###****++++++++*****#*######****++******
-+++++**+=+##*#####+.=+*+==-:::+*- .::=. :+%%*-.  .-=:     .#%=.==+#**#####*****++++++*+*****#####*************
-++********###%#*#+- -..:-   .=*::+==+-.-*@@@%%##**+-=- .:=*#%@+  ::=+#######***+++++++*****++********#####****
-******###########= =.      ...-=+*=++-=#%%#%@@@@@@@%%%#%@@@@%@@*::  .=######***++********++++*****=+++#+*%####
-****++#%#########*--==+-::.    .:::   :=--+++***#%@@@@@@###*=--::.. :+*#####************++++*+++**++++=-=**+#%
-#++####%%%####*#+=+=-==-::..        .:...:=--:--+#%@@%%*#-       .-=+++**####***********++++***++++++++**++==*
-##*#####%%###*#+---.:                 :+**+=--=+*##%%@@@@%*+-  :::=+*+++***#**#######**********+++++*****+****
-*###*#########*=.       .. ...      .:=++***+*****#%@%+-==-:   +#..--++++++++*##########******+***************
-***###########+.      ..=::... .:--::=++####***++++**+++==+=-: :+- .=+++***+++****##########****************##
-#***#####*#####*:     ..       ..:. :--+**+++++++==--=##+:.  :.-+.:-+++*****++****###%%%#%#*****#######*#####*
-#**#*###########-                    :=+=--==++++=++*%%@@@@#+-.-=-==+++++*******#######%%%******#############%
-###**#######*****-..                 .:.  ..:..::------=----+%*+=+++=+++*****#***####%%%%%@%%%####%%%%###%%@@@
-######*##*#*++****- .             :::                       ..:==+++====++**+***#%@@%%@@@@@@@@%%%@*-+*#@@@@@@@
-*#*###*****+++++-....            .:-=:                         =+++=-=====++**#@@@@@@@@@%%%####%#+-*%%@@@@@@@@
-+*+**+###*++++++-:     ....      :=++=:                        -======+*###%@@@@@@@@@@@@@@@%@@*=*%**%%%@%@%##*
-+++++++*++*++++++-    ...       .-=+**=:                     :-----=+*#*#**#%#%%%%@%@@@@@@@@@@##%*-+##%%#+++=-
-+++++++-:-======= .:   .        .-=+*#*=:.:---==:            :--=====+=-==::::...:---++#%@@@@@@@%#*#%#+===-...
-+++++=+==--=----:               .-++*##*++===+===:          .:.:==*=+*#%@@%%%@%#*****+*+=+%%%@@@@%%%%%*=:.
-+++=+=+=-===------:.            .:===*##*==--::..          .:     .  .:---=+*#%@%@@@@@@@%##%@%%@@@@%%%%#=.
-+++++=====--::-----::.          .:---=+**+--:::    ... .:--::.:.      .-=::. ..:--*%@@@@@@@%@%##+#@@@%#**+:
-+++++++===--::--------          ::-----+**+--=-::::::-==+*+**=+*+=-=+-.:#@%*+*-:.::--=#%#*##**##*=+*#@@%#*+-
-=+++=+=--=------:::---:::       :-==----=++=::::...-***#%%%@%%%@@@@@@%%#**@@@@@*+-: ...-+=:-*#*++*=-:=+*%#*++:
-==-===---------:::::.::--:..::. :-=----:-+*=.  ..-=+**#@@@%@@@@@@@@@@@@@@@@@@@@@%%+.    .-=-:=**-:=- :--=**+=+
-=-::------:---:::::::::---:::...-==*=::--:+*:.:-***%*%@@@@@@@@@@@%@@@@@@@@=+**=-=+-.       --. -++---. ::-+**+
-===-::-:::::::::::::--=-.     ::-=*#+:-+=--+*-*%%%%%@@@@@@@@@@@@@@@@@@@@@@*:.     -..        .: .=*=--   .::+*
-:::---:.:::::::::=#++*-...::..-=-*%%++%@@#*#%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%#*=:   :-        :---*#+-.     ..
-:-:.....:::-*#**=*@#+-.-=+++=+#*#%@@%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%*=:            .    -*=.
--==-::-:::::*@@@%*=+#=*####%%%@@@%%%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%%*-                  --.
-------=+#++=:-+***###%%%%#%%%%%%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%#*+:                  .-:.
---:----+*++*##++*##%%@%%%@@%##%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%%@%#*+=:                    ..:.
--=*##%@@@@@@#+%@%#**#%@@@%%%%%%%%%@@@@@@@@@@@@@@@@@%%@%%@@@@@@@@@@@@@@@@@@@@%%##**=-:                        .
-@@@@@@@@@@@@%#++%@##**%++%#%%%%%%@@@@@@@@@@@@@@@@%%#@@@@@@@@@@@@@@@@@@@@%%@%%#**++=-:
-%@@@@@@@@@@@@#+--=++::.-*##%%%@@@@@@@@@@@@@@@@@@@@@@%#%%@@@@@@@%%%%%%%###**---=+=---.                       ..</pre>
     </div>
   </header>
 
   <section class="shot">
-    <div class="dither dither-left" aria-hidden="true"><canvas></canvas></div>
-    <div class="dither dither-right" aria-hidden="true"><canvas></canvas></div>
     <div class="wrap">
       <img src="/assets/app-screenshot.jpg" alt="Zeron driving a Claude Code session with a live branch diff sidebar" />
     </div>
@@ -1528,6 +1444,20 @@ love the ui</p>
   </footer>
 
 <script defer src="/downloads.js"></script>
+<script type="module">
+  // Hero background: agent traces as a faint glyph field, a slow violet
+  // beam sweeping through it, and a violet afterglow under the pointer.
+  // The clear ellipse keeps the centered copy legible.
+  import { mountGlyphField } from "/glyph-field.js";
+  mountGlyphField(document.querySelector(".hero"), {
+    base: [156, 146, 181], // --dim
+    baseAlpha: [0.05, 0.13],
+    glow: [183, 157, 249], // --purple-hi
+    glowAlpha: 0.8,
+    clear: { x: 0.5, y: 0.5, rx: 0.36, ry: 0.44 },
+    beam: { angle: -38, width: 0.12, sweep: 26, alpha: 0.35 },
+  });
+</script>
 <script>
   // GitHub star count on the "Star on GitHub" buttons. Cached for an hour so
   // repeat visits stay under the unauthenticated API rate limit.
@@ -1555,92 +1485,11 @@ love the ui</p>
   })();
 </script>
 <script>
-  // Edge ascii: a slow-warping noise field mapped through a glyph density
-  // ramp — organic clusters of characters hugging each page edge, dense at
-  // the outside and thinning toward the content. Freezes on reduced motion.
-  (() => {
-    const CW = 12, CH = 14; // glyph cell
-    const RAMP = [" ", " ", " ", ".", ":", ">", "~", "×", "*", "#"];
-    const panes = [...document.querySelectorAll(".dither")].map((el, i) => ({
-      el,
-      cv: el.querySelector("canvas"),
-      ctx: el.querySelector("canvas").getContext("2d"),
-      right: el.classList.contains("dither-right"),
-      ox: i * 397, // decorrelate the two sides
-      cols: 0,
-      rows: 0,
-    }));
-    const dpr = Math.min(devicePixelRatio || 1, 2);
-    const resize = () => {
-      for (const p of panes) {
-        const w = p.el.clientWidth, h = p.el.clientHeight;
-        p.cv.width = w * dpr;
-        p.cv.height = h * dpr;
-        p.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        p.ctx.font = '10px "Geist Mono", monospace';
-        p.ctx.textBaseline = "top";
-        p.cols = Math.ceil(w / CW);
-        p.rows = Math.ceil(h / CH);
-      }
-    };
-    const field = (x, y, t) => {
-      const a = x * 0.55, b = y * 0.35;
-      const v =
-        Math.sin(a + 2.1 * Math.sin(b * 0.9 + t) + t * 0.7) *
-        Math.cos(b - 1.7 * Math.sin(a * 0.6 - t * 0.8));
-      return 0.5 + 0.5 * v;
-    };
-    const draw = (t) => {
-      for (const p of panes) {
-        if (p.el.offsetWidth === 0) continue;
-        p.ctx.clearRect(0, 0, p.cv.width, p.cv.height);
-        for (let y = 0; y < p.rows; y++) {
-          for (let x = 0; x < p.cols; x++) {
-            // distance from the outer edge, 0 = outermost column
-            const edge = p.right ? p.cols - 1 - x : x;
-            const falloff = 1 - edge / p.cols;
-            const v = field(x + p.ox, y, t) * falloff * 1.6;
-            const g = RAMP[Math.min(RAMP.length - 1, (v * RAMP.length) | 0)];
-            if (g === " ") continue;
-            p.ctx.fillStyle = `rgba(139, 92, 246, ${(0.16 + v * 0.5).toFixed(2)})`;
-            p.ctx.fillText(g, x * CW + 2, y * CH + 2);
-          }
-        }
-      }
-    };
-    resize();
-    let last = 0;
-    addEventListener("resize", () => { resize(); draw(last); });
-    // The panes stretch to the app-screenshot section, whose height isn't
-    // final until the image loads — re-measure whenever their box changes,
-    // or the canvases end up CSS-stretched into streaks.
-    if (typeof ResizeObserver !== "undefined") {
-      const ro = new ResizeObserver(() => { resize(); draw(last); });
-      for (const p of panes) ro.observe(p.el);
-    }
-    document.fonts.ready.then(() => { resize(); draw(last); });
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      document.fonts.ready.then(() => draw(0));
-    } else {
-      let prev = 0;
-      const tick = (ms) => {
-        if (ms - prev > 66) { // ~15fps: the reference drifts slowly
-          prev = ms;
-          last = ms * 0.00022;
-          draw(last);
-        }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    }
-  })();
-
-  // Ascii hands: rendered exactly like the edge railing — same cell grid,
-  // glyph ramp, colour, drift rate and fade — but shaped by a baked density
-  // map of each photo, so the characters keep flipping organically while
+  // Ascii hands: a slow-warping noise field mapped through a glyph density
+  // ramp, shaped by a baked density map of each photo, so the characters keep flipping organically while
   // the hand form holds steady.
   (() => {
-    const CW = 12, CH = 14; // glyph cell, matches the edge ascii
+    const CW = 12, CH = 14; // glyph cell
     const RAMP = [" ", " ", " ", ".", ":", ">", "~", "×", "*", "#"];
     const HANDS = [
       { sel: ".hand-down", ox: 101, data: `70635533333633333633666666306605333200222100100000000000
@@ -1854,7 +1703,7 @@ love the ui</p>
     } else {
       let prev = 0;
       const tick = (ms) => {
-        if (ms - prev > 66) { // ~15fps, same drift as the edge ascii
+        if (ms - prev > 66) { // ~15fps: the reference drifts slowly
           prev = ms;
           draw(ms * 0.00022);
         }
