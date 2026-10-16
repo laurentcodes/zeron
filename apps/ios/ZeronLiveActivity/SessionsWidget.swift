@@ -27,12 +27,12 @@ private struct SessionsWidgetView: View {
 
             switch family {
             case .systemSmall: SmallSessions(snapshot: snapshot, asOf: asOf)
-            case .systemMedium: ListSessions(snapshot: snapshot, asOf: asOf, limit: 3)
+            case .systemMedium: ListSessions(snapshot: snapshot, asOf: asOf, limit: 2, compact: true)
             case .systemLarge: ListSessions(snapshot: snapshot, asOf: asOf, limit: 6)
             case .accessoryCircular: CircularSessions(snapshot: snapshot)
             case .accessoryRectangular: RectangularSessions(snapshot: snapshot, asOf: asOf)
             case .accessoryInline: Text(asOf.map { "\(snapshot.summary) · as of \($0.stamp)" } ?? snapshot.summary)
-            default: ListSessions(snapshot: snapshot, asOf: asOf, limit: 3)
+            default: ListSessions(snapshot: snapshot, asOf: asOf, limit: 2, compact: true)
             }
         } else {
             SignedOut(compact: family.isAccessory)
@@ -85,14 +85,16 @@ private struct ListSessions: View {
     let snapshot: WidgetSnapshot
     let asOf: Date?
     let limit: Int
+    var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Headline(snapshot: snapshot, asOf: asOf)
+            HStack(alignment: .center) {
+                Headline(snapshot: snapshot, asOf: asOf, compact: compact)
                 Spacer()
                 NewSessionButton()
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             if snapshot.sessions.isEmpty {
                 Spacer()
@@ -102,16 +104,35 @@ private struct ListSessions: View {
                     .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                ForEach(snapshot.sessions.prefix(limit)) { session in
-                    Link(destination: ZeronLink.chat(session.id)) {
-                        SessionLine(session: session, asOf: asOf)
-                    }
-                }
-                Spacer(minLength: 0)
+                sessionRows
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(ZeronLink.sessions)
+    }
+
+    private var sessionRows: some View {
+        let sessions = Array(snapshot.sessions.prefix(limit))
+        let remaining = snapshot.needsYou + snapshot.working + snapshot.done - sessions.count
+
+        return VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+            ForEach(sessions) { session in
+                Link(destination: ZeronLink.chat(session.id)) {
+                    SessionLine(session: session, asOf: asOf)
+                }
+            }
+
+            if remaining > 0 {
+                Link(destination: ZeronLink.sessions) {
+                    Text("\(remaining) more \(remaining == 1 ? "session" : "sessions")")
+                        .font(Face.sans(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -180,32 +201,46 @@ private struct RectangularSessions: View {
 private struct Headline: View {
     let snapshot: WidgetSnapshot
     let asOf: Date?
+    var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if snapshot.needsYou > 0 {
-                Text("\(snapshot.needsYou)")
-                    .font(Face.mono(26))
-                    .foregroundStyle(Tone.warning)
-                Text(caption("Need you", extra: snapshot.working > 0 ? "\(snapshot.working) working" : nil))
-                    .font(Face.sans(12))
-                    .foregroundStyle(.secondary)
-            } else if snapshot.working > 0 {
-                Text("\(snapshot.working)")
-                    .font(Face.mono(26))
-                    .foregroundStyle(Tone.accent)
-                Text(caption("Working"))
-                    .font(Face.sans(12))
-                    .foregroundStyle(.secondary)
+        Group {
+            if compact {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    primary
+                    secondary
+                }
             } else {
-                Text("All clear")
-                    .font(Face.sans(17))
-                Text(caption(snapshot.done > 0 ? "\(snapshot.done) finished" : "Nothing running"))
-                    .font(Face.sans(12))
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 0) {
+                    primary
+                    secondary
+                }
             }
         }
         .lineLimit(1)
+    }
+
+    private var primary: some View {
+        Text(count.map { String($0) } ?? "All clear")
+            .font(count == nil ? Face.sans(17) : Face.mono(compact ? 22 : 26))
+            .foregroundStyle(count == nil ? Color.primary : snapshot.needsYou > 0 ? Tone.warning : Tone.accent)
+    }
+
+    private var secondary: some View {
+        Text(caption(label, extra: snapshot.needsYou > 0 && snapshot.working > 0 ? "\(snapshot.working) working" : nil))
+            .font(Face.sans(12))
+            .foregroundStyle(.secondary)
+    }
+
+    private var count: Int? {
+        if snapshot.needsYou > 0 { return snapshot.needsYou }
+        return snapshot.working > 0 ? snapshot.working : nil
+    }
+
+    private var label: String {
+        if snapshot.needsYou > 0 { return "Need you" }
+        if snapshot.working > 0 { return "Working" }
+        return snapshot.done > 0 ? "\(snapshot.done) finished" : "Nothing running"
     }
 
     private func caption(_ label: String, extra: String? = nil) -> String {

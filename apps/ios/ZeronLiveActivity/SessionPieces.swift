@@ -21,12 +21,13 @@ struct SessionLine: View {
                     .lineLimit(1)
                     .privacySensitive()
             }
-
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             SessionTime(session: session, asOf: asOf)
                 .font(Face.mono(11))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 52, alignment: .trailing)
         }
     }
 }
